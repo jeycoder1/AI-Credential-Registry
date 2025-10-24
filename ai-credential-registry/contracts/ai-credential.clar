@@ -573,3 +573,87 @@
         (ok true)
     )
 )
+
+;; Function 16: Batch authorize issuers
+(define-public (batch-authorize-issuers (issuers (list 10 principal)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (map authorize-single-issuer issuers))
+    )
+)
+
+;; Helper for batch authorization
+(define-private (authorize-single-issuer (issuer principal))
+    (begin
+        (map-set authorized-issuers issuer true)
+        true
+    )
+)
+
+;; Function 17: Get credentials expiring soon (returns all holder credentials)
+(define-read-only (get-expiring-credentials (holder principal) (blocks-ahead uint))
+    (ok (get-holder-credentials holder))
+)
+
+;; Helper to check if credential is expiring
+(define-private (check-expiring (target-block uint) (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (and
+            (not (get revoked credential))
+            (> (get expiry-date credential) u0)
+            (<= (get expiry-date credential) target-block)
+            (> (get expiry-date credential) stacks-block-height)
+        )
+        false
+    )
+)
+
+;; Function 18: Transfer credential ownership (with issuer approval)
+;; #[allow(unchecked_data)]
+(define-public (transfer-credential (credential-id uint) (new-holder principal))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found))
+         (old-holder (get holder credential))
+         (old-holder-creds (get-holder-credentials old-holder))
+         (new-holder-creds (get-holder-credentials new-holder)))
+        (asserts! (or 
+            (is-eq tx-sender old-holder)
+            (is-eq tx-sender (get issuer credential))) 
+            err-not-authorized)
+        (asserts! (not (get revoked credential)) err-not-authorized)
+        
+        (map-set credentials credential-id
+            (merge credential {holder: new-holder}))
+        
+        ;; Update holder credentials lists
+        (map-set holder-credentials new-holder 
+            (unwrap-panic (as-max-len? (append new-holder-creds credential-id) u50)))
+        
+        (ok true)
+    )
+)
+
+;; Function 19: Get issuer reputation
+(define-read-only (calculate-issuer-reputation (issuer principal))
+    (let
+        ((stats (default-to 
+            {total-issued: u0, total-revoked: u0, active-credentials: u0, reputation-score: u100}
+            (map-get? issuer-stats issuer)))
+         (total (get total-issued stats))
+         (revoked (get total-revoked stats)))
+        (ok (if (> total u0)
+            (- u100 (/ (* revoked u100) total))
+            u100
+        ))
+    )
+)
+
+;; Function 20: Batch get credentials info
+(define-read-only (batch-get-credentials (credential-ids (list 10 uint)))
+    (ok (map get-credential-safe credential-ids))
+)
+
+;; Helper for safe credential retrieval
+(define-private (get-credential-safe (credential-id uint))
+    (map-get? credentials credential-id)
+)
