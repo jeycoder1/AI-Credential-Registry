@@ -56,3 +56,69 @@
         (ok true)
     )
 )
+
+;; Read-only functions
+(define-read-only (get-credential (credential-id uint))
+    (map-get? credentials credential-id)
+)
+
+(define-read-only (is-authorized-issuer (issuer principal))
+    (default-to false (map-get? authorized-issuers issuer))
+)
+
+(define-read-only (get-holder-credentials (holder principal))
+    (default-to (list) (map-get? holder-credentials holder))
+)
+
+(define-read-only (get-issuer-credentials (issuer principal))
+    (default-to (list) (map-get? issuer-credentials issuer))
+)
+
+(define-read-only (verify-credential (credential-id uint) (expected-hash (buff 32)))
+    (match (map-get? credentials credential-id)
+        credential (and 
+            (is-eq (get credential-hash credential) expected-hash)
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) (< stacks-block-height (get expiry-date credential)))
+        )
+        false
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (issue-credential 
+    (holder principal) 
+    (credential-type (string-ascii 100))
+    (credential-hash (buff 32))
+    (expiry-date uint))
+    (let
+        ((new-id (var-get credential-id-nonce))
+         (holder-creds (get-holder-credentials holder))
+         (issuer-creds (get-issuer-credentials tx-sender)))
+        (asserts! (is-authorized-issuer tx-sender) err-invalid-issuer)
+        (map-set credentials new-id
+            {
+                holder: holder,
+                issuer: tx-sender,
+                credential-type: credential-type,
+                credential-hash: credential-hash,
+                issue-date: stacks-block-height,
+                expiry-date: expiry-date,
+                revoked: false
+            }
+        )
+        (map-set holder-credentials holder (unwrap-panic (as-max-len? (append holder-creds new-id) u50)))
+        (map-set issuer-credentials tx-sender (unwrap-panic (as-max-len? (append issuer-creds new-id) u100)))
+        (var-set credential-id-nonce (+ new-id u1))
+        (ok new-id)
+    )
+)
+
+(define-public (revoke-credential (credential-id uint))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found)))
+        (asserts! (is-eq tx-sender (get issuer credential)) err-not-authorized)
+        (map-set credentials credential-id (merge credential {revoked: true}))
+        (ok true)
+    )
+)
