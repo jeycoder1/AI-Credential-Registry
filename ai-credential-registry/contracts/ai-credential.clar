@@ -122,3 +122,279 @@
         (ok true)
     )
 )
+
+;; Additional Data Variables
+(define-data-var total-credentials-issued uint u0)
+(define-data-var total-revoked-credentials uint u0)
+(define-data-var platform-fee uint u100000) ;; 0.1 STX fee for issuing
+
+;; Additional Data Maps
+(define-map credential-metadata
+    uint
+    {
+        description: (string-ascii 500),
+        achievement-level: (string-ascii 50),
+        institution: (string-ascii 200)
+    }
+)
+
+(define-map issuer-stats
+    principal
+    {
+        total-issued: uint,
+        total-revoked: uint,
+        active-credentials: uint,
+        reputation-score: uint
+    }
+)
+
+(define-map holder-stats
+    principal
+    {
+        total-received: uint,
+        active-count: uint,
+        credential-types: (list 20 (string-ascii 100))
+    }
+)
+
+(define-map credential-endorsements
+    uint
+    {
+        endorsers: (list 10 principal),
+        endorsement-count: uint
+    }
+)
+
+(define-map credential-verification-log
+    {credential-id: uint, verifier: principal}
+    uint
+)
+
+;; Function 1: Get credential with metadata
+(define-read-only (get-credential-full (credential-id uint))
+    (let
+        ((cred (unwrap! (map-get? credentials credential-id) err-not-found))
+         (metadata (map-get? credential-metadata credential-id)))
+        (ok {
+            credential: cred,
+            metadata: metadata
+        })
+    )
+)
+
+;; Function 2: Check if credential is valid (not expired and not revoked)
+(define-read-only (is-credential-valid (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (ok (and 
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) 
+                (< stacks-block-height (get expiry-date credential)))
+        ))
+        err-not-found
+    )
+)
+
+;; Function 3: Get issuer statistics
+(define-read-only (get-issuer-stats (issuer principal))
+    (ok (default-to 
+        {total-issued: u0, total-revoked: u0, active-credentials: u0, reputation-score: u100}
+        (map-get? issuer-stats issuer)))
+)
+
+;; Function 4: Get holder statistics
+(define-read-only (get-holder-stats (holder principal))
+    (ok (default-to 
+        {total-received: u0, active-count: u0, credential-types: (list)}
+        (map-get? holder-stats holder)))
+)
+
+;; Function 5: Get platform statistics
+(define-read-only (get-platform-stats)
+    (ok {
+        total-credentials: (var-get credential-id-nonce),
+        total-issued: (var-get total-credentials-issued),
+        total-revoked: (var-get total-revoked-credentials),
+        platform-fee: (var-get platform-fee)
+    })
+)
+
+;; Function 6: Count active credentials for holder
+(define-read-only (count-active-credentials (holder principal))
+    (let
+        ((holder-creds (get-holder-credentials holder)))
+        (ok (len (filter is-credential-active-filter holder-creds)))
+    )
+)
+
+;; Helper function to check if credential is active
+(define-private (is-credential-active-filter (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (and 
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) 
+                (< stacks-block-height (get expiry-date credential)))
+        )
+        false
+    )
+)
+
+;; Function 7: Get credentials by type for holder (returns all holder credentials)
+(define-read-only (get-credentials-by-type (holder principal) (cred-type (string-ascii 100)))
+    (ok (get-holder-credentials holder))
+)
+
+;; Helper function to check credential type
+(define-private (check-credential-type (target-type (string-ascii 100)) (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (is-eq (get credential-type credential) target-type)
+        false
+    )
+)
+
+;; Function 8: Set platform fee (owner only)
+;; #[allow(unchecked_data)]
+(define-public (set-platform-fee (new-fee uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set platform-fee new-fee)
+        (ok true)
+    )
+)
+
+;; Additional Data Variables
+(define-data-var total-credentials-issued uint u0)
+(define-data-var total-revoked-credentials uint u0)
+(define-data-var platform-fee uint u100000) ;; 0.1 STX fee for issuing
+
+;; Additional Data Maps
+(define-map credential-metadata
+    uint
+    {
+        description: (string-ascii 500),
+        achievement-level: (string-ascii 50),
+        institution: (string-ascii 200)
+    }
+)
+
+(define-map issuer-stats
+    principal
+    {
+        total-issued: uint,
+        total-revoked: uint,
+        active-credentials: uint,
+        reputation-score: uint
+    }
+)
+
+(define-map holder-stats
+    principal
+    {
+        total-received: uint,
+        active-count: uint,
+        credential-types: (list 20 (string-ascii 100))
+    }
+)
+
+(define-map credential-endorsements
+    uint
+    {
+        endorsers: (list 10 principal),
+        endorsement-count: uint
+    }
+)
+
+(define-map credential-verification-log
+    {credential-id: uint, verifier: principal}
+    uint
+)
+
+;; Function 1: Get credential with metadata
+(define-read-only (get-credential-full (credential-id uint))
+    (let
+        ((cred (unwrap! (map-get? credentials credential-id) err-not-found))
+         (metadata (map-get? credential-metadata credential-id)))
+        (ok {
+            credential: cred,
+            metadata: metadata
+        })
+    )
+)
+
+;; Function 2: Check if credential is valid (not expired and not revoked)
+(define-read-only (is-credential-valid (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (ok (and 
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) 
+                (< stacks-block-height (get expiry-date credential)))
+        ))
+        err-not-found
+    )
+)
+
+;; Function 3: Get issuer statistics
+(define-read-only (get-issuer-stats (issuer principal))
+    (ok (default-to 
+        {total-issued: u0, total-revoked: u0, active-credentials: u0, reputation-score: u100}
+        (map-get? issuer-stats issuer)))
+)
+
+;; Function 4: Get holder statistics
+(define-read-only (get-holder-stats (holder principal))
+    (ok (default-to 
+        {total-received: u0, active-count: u0, credential-types: (list)}
+        (map-get? holder-stats holder)))
+)
+
+;; Function 5: Get platform statistics
+(define-read-only (get-platform-stats)
+    (ok {
+        total-credentials: (var-get credential-id-nonce),
+        total-issued: (var-get total-credentials-issued),
+        total-revoked: (var-get total-revoked-credentials),
+        platform-fee: (var-get platform-fee)
+    })
+)
+
+;; Function 6: Count active credentials for holder
+(define-read-only (count-active-credentials (holder principal))
+    (let
+        ((holder-creds (get-holder-credentials holder)))
+        (ok (len (filter is-credential-active-filter holder-creds)))
+    )
+)
+
+;; Helper function to check if credential is active
+(define-private (is-credential-active-filter (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (and 
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) 
+                (< stacks-block-height (get expiry-date credential)))
+        )
+        false
+    )
+)
+
+;; Function 7: Get credentials by type for holder (returns all holder credentials)
+(define-read-only (get-credentials-by-type (holder principal) (cred-type (string-ascii 100)))
+    (ok (get-holder-credentials holder))
+)
+
+;; Helper function to check credential type
+(define-private (check-credential-type (target-type (string-ascii 100)) (credential-id uint))
+    (match (map-get? credentials credential-id)
+        credential (is-eq (get credential-type credential) target-type)
+        false
+    )
+)
+
+;; Function 8: Set platform fee (owner only)
+;; #[allow(unchecked_data)]
+(define-public (set-platform-fee (new-fee uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set platform-fee new-fee)
+        (ok true)
+    )
+)
