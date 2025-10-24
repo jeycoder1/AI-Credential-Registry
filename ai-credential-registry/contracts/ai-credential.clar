@@ -398,3 +398,178 @@
         (ok true)
     )
 )
+
+;; Function 9: Enhanced credential issuance with metadata
+;; #[allow(unchecked_data)]
+(define-public (issue-credential-v2
+    (holder principal) 
+    (credential-type (string-ascii 100))
+    (credential-hash (buff 32))
+    (expiry-date uint)
+    (description (string-ascii 500))
+    (achievement-level (string-ascii 50))
+    (institution (string-ascii 200)))
+    (let
+        ((new-id (var-get credential-id-nonce))
+         (holder-creds (get-holder-credentials holder))
+         (issuer-creds (get-issuer-credentials tx-sender))
+         (issuer-statistics (default-to 
+            {total-issued: u0, total-revoked: u0, active-credentials: u0, reputation-score: u100}
+            (map-get? issuer-stats tx-sender)))
+         (holder-statistics (default-to 
+            {total-received: u0, active-count: u0, credential-types: (list)}
+            (map-get? holder-stats holder))))
+        (asserts! (is-authorized-issuer tx-sender) err-invalid-issuer)
+        (try! (stx-transfer? (var-get platform-fee) tx-sender contract-owner))
+        
+        ;; Create credential
+        ;; #[allow(unchecked_data)]
+        (map-set credentials new-id
+            {
+                holder: holder,
+                issuer: tx-sender,
+                credential-type: credential-type,
+                credential-hash: credential-hash,
+                issue-date: stacks-block-height,
+                expiry-date: expiry-date,
+                revoked: false
+            }
+        )
+        
+        ;; Set metadata
+        ;; #[allow(unchecked_data)]
+        (map-set credential-metadata new-id
+            {
+                description: description,
+                achievement-level: achievement-level,
+                institution: institution
+            }
+        )
+        
+        ;; Update mappings
+        ;; #[allow(unchecked_data)]
+        (map-set holder-credentials holder (unwrap-panic (as-max-len? (append holder-creds new-id) u50)))
+        (map-set issuer-credentials tx-sender (unwrap-panic (as-max-len? (append issuer-creds new-id) u100)))
+        
+        ;; Update statistics
+        (map-set issuer-stats tx-sender
+            (merge issuer-statistics {
+                total-issued: (+ (get total-issued issuer-statistics) u1),
+                active-credentials: (+ (get active-credentials issuer-statistics) u1)
+            }))
+        
+        (map-set holder-stats holder
+            (merge holder-statistics {
+                total-received: (+ (get total-received holder-statistics) u1),
+                active-count: (+ (get active-count holder-statistics) u1)
+            }))
+        
+        (var-set credential-id-nonce (+ new-id u1))
+        (var-set total-credentials-issued (+ (var-get total-credentials-issued) u1))
+        (ok new-id)
+    )
+)
+
+;; Function 10: Enhanced revocation with stats update
+(define-public (revoke-credential-v2 (credential-id uint))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found))
+         (issuer-statistics (default-to 
+            {total-issued: u0, total-revoked: u0, active-credentials: u0, reputation-score: u100}
+            (map-get? issuer-stats tx-sender)))
+         (holder-statistics (default-to 
+            {total-received: u0, active-count: u0, credential-types: (list)}
+            (map-get? holder-stats (get holder credential)))))
+        (asserts! (is-eq tx-sender (get issuer credential)) err-not-authorized)
+        (asserts! (not (get revoked credential)) err-already-exists)
+        
+        (map-set credentials credential-id (merge credential {revoked: true}))
+        
+        ;; Update issuer stats
+        (map-set issuer-stats tx-sender
+            (merge issuer-statistics {
+                total-revoked: (+ (get total-revoked issuer-statistics) u1),
+                active-credentials: (- (get active-credentials issuer-statistics) u1)
+            }))
+        
+        ;; Update holder stats
+        (map-set holder-stats (get holder credential)
+            (merge holder-statistics {
+                active-count: (if (> (get active-count holder-statistics) u0)
+                    (- (get active-count holder-statistics) u1)
+                    u0)
+            }))
+        
+        (var-set total-revoked-credentials (+ (var-get total-revoked-credentials) u1))
+        (ok true)
+    )
+)
+
+;; Function 11: Endorse a credential
+(define-public (endorse-credential (credential-id uint))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found))
+         (current-endorsements (default-to 
+            {endorsers: (list), endorsement-count: u0}
+            (map-get? credential-endorsements credential-id)))
+         (endorsers-list (get endorsers current-endorsements)))
+        (asserts! (is-some (index-of? endorsers-list tx-sender)) err-already-exists)
+        (asserts! (not (get revoked credential)) err-not-authorized)
+        
+        (map-set credential-endorsements credential-id
+            {
+                endorsers: (unwrap-panic (as-max-len? (append endorsers-list tx-sender) u10)),
+                endorsement-count: (+ (get endorsement-count current-endorsements) u1)
+            })
+        (ok true)
+    )
+)
+
+;; Function 12: Get credential endorsements
+(define-read-only (get-credential-endorsements (credential-id uint))
+    (ok (map-get? credential-endorsements credential-id))
+)
+
+;; Function 13: Verify and log credential check
+;; #[allow(unchecked_data)]
+(define-public (verify-and-log (credential-id uint))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found))
+         (current-verifications (default-to u0 
+            (map-get? credential-verification-log {credential-id: credential-id, verifier: tx-sender}))))
+        (map-set credential-verification-log 
+            {credential-id: credential-id, verifier: tx-sender}
+            (+ current-verifications u1))
+        (ok (and 
+            (not (get revoked credential))
+            (or (is-eq (get expiry-date credential) u0) 
+                (< stacks-block-height (get expiry-date credential)))
+        ))
+    )
+)
+
+;; Function 14: Get verification count
+(define-read-only (get-verification-count (credential-id uint) (verifier principal))
+    (ok (default-to u0 
+        (map-get? credential-verification-log {credential-id: credential-id, verifier: verifier})))
+)
+
+;; Function 15: Update credential metadata (issuer only)
+;; #[allow(unchecked_data)]
+(define-public (update-credential-metadata 
+    (credential-id uint)
+    (description (string-ascii 500))
+    (achievement-level (string-ascii 50))
+    (institution (string-ascii 200)))
+    (let
+        ((credential (unwrap! (map-get? credentials credential-id) err-not-found)))
+        (asserts! (is-eq tx-sender (get issuer credential)) err-not-authorized)
+        (map-set credential-metadata credential-id
+            {
+                description: description,
+                achievement-level: achievement-level,
+                institution: institution
+            })
+        (ok true)
+    )
+)
